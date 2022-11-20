@@ -75,23 +75,45 @@ void identify(homekit_value_t _value) {
 
 /* ============== END HOMEKIT CHARACTERISTIC DECLARATIONS ================================================================= */
 
+#define N 60 //samples in the ringbuffer and seconds of the sliding window
+uint32_t ring[N];
+uint32_t sort[N];
 tsl2561_t lightSensor;
 char *dmtczidx=NULL;
-#define BEAT  10 //in seconds
 TimerHandle_t xTimer;
 void vTimerCallback( TimerHandle_t xTimer ) {
     uint32_t seconds = ( uint32_t ) pvTimerGetTimerID( xTimer );
-    vTimerSetTimerID( xTimer, (void*)seconds+BEAT); //136 year to loop
-    uint32_t intlux = 0;
-    if (tsl2561_read_lux(&lightSensor, &intlux)) {
-        float old_lux=lux.value.float_value;
-        lux.value.float_value=(float)intlux;
-        if (old_lux!=lux.value.float_value) \
-            homekit_characteristic_notify(&lux, HOMEKIT_FLOAT(lux.value.float_value));
+    vTimerSetTimerID( xTimer, (void*)seconds++); //136 year to loop
+    int i,idx,in,io;
+    uint32_t old,new=0;
+    idx=seconds%N;
+    if (tsl2561_read_lux(&lightSensor, &new)) {
+        old=ring[idx]; ring[idx]=new;
+        if (new<old) {  //search where to insert new measurement into sorted array
+            i=0;   while (new>sort[i]) i++; in=i;
+                   while (old>sort[i]) i++; io=i;
+            for (i=io;i>in;i--) sort[i]=sort[i-1];
+            sort[i]=new;
+        }
+        // if (new==old) do_nothing;
+        if (new>old) {
+            i=N-1; while (new<sort[i]) i--; in=i;
+                   while (old<sort[i]) i--; io=i;
+            for (i=io;i<in;i++) sort[i]=sort[i+1];
+            sort[i]=new;
+        }
+        //for (i=0;i<N;i++) printf("%d ",sort[i]); printf("\n");
+        printf("time:%3ds 60sMedian:%ulx now:%ulx\n", seconds, sort[N/2], new);
 
-        printf("%3d s %u lx\n", seconds, intlux);
-        int n=mqtt_client_publish("{\"idx\":%s,\"nvalue\":0,\"svalue\":\"%.1f\"}", dmtczidx, lux.value.float_value);
-        if (n<0) printf("MQTT publish failed because %s\n",MQTT_CLIENT_ERROR(n));
+        if (!idx) { //only publish at the full minute
+            float old_lux=lux.value.float_value;
+            lux.value.float_value=(float)sort[N/2]?sort[N/2]:0.001; //zero is not a valid value!
+            if (old_lux!=lux.value.float_value) \
+                homekit_characteristic_notify(&lux, HOMEKIT_FLOAT(lux.value.float_value));
+
+            int n=mqtt_client_publish("{\"idx\":%s,\"nvalue\":0,\"svalue\":\"%u\"}", dmtczidx, sort[N/2]);
+            if (n<0) printf("MQTT publish failed because %s\n",MQTT_CLIENT_ERROR(n));
+        }
     } else printf("Could not read data from TSL2561\n");
 }
 
@@ -112,6 +134,7 @@ static void ota_string() {
 }
 
 void device_init() {
+    uint32_t lux;
     i2c_init(I2C_BUS, SCL_PIN, SDA_PIN, I2C_FREQ_100K);
     // TSL2561_I2C_ADDR_VCC(0x49) TSL2561_I2C_ADDR_GND(0x29) TSL2561_I2C_ADDR_FLOAT(0x39) Default
     lightSensor.i2c_dev.addr = TSL2561_I2C_ADDR_GND;
@@ -121,10 +144,11 @@ void device_init() {
     tsl2561_set_integration_time(&lightSensor, TSL2561_INTEGRATION_402MS);
     // TSL2561_GAIN_16X(0x10) TSL2561_GAIN_1X(0x00) Default
     tsl2561_set_gain(&lightSensor, TSL2561_GAIN_1X);
+    if (tsl2561_read_lux(&lightSensor, &lux)) for (int i=0;i<N;i++) {ring[i]=lux;sort[i]=lux;}
     //sysparam_set_string("ota_string", "192.168.178.5;LuxFront;fakepassword;91"); //can be used if not using LCM
     ota_string();
     mqtt_client_init(&mqttconf);
-    xTimer=xTimerCreate( "Timer", BEAT*1000/portTICK_PERIOD_MS, pdTRUE, (void*)0, vTimerCallback);
+    xTimer=xTimerCreate( "Timer", 1000/portTICK_PERIOD_MS, pdTRUE, (void*)0, vTimerCallback);
     xTimerStart(xTimer, 0);
 }
 

@@ -83,7 +83,7 @@ char *dmtczidx=NULL;
 TimerHandle_t xTimer;
 void vTimerCallback( TimerHandle_t xTimer ) {
     uint32_t seconds = ( uint32_t ) pvTimerGetTimerID( xTimer );
-    vTimerSetTimerID( xTimer, (void*)seconds++); //136 year to loop
+    vTimerSetTimerID( xTimer, (void*)seconds+1); //136 year to loop
     int i,idx,in,io;
     uint32_t old,new=0;
     idx=seconds%N;
@@ -103,7 +103,7 @@ void vTimerCallback( TimerHandle_t xTimer ) {
             sort[i]=new;
         }
         //for (i=0;i<N;i++) printf("%d ",sort[i]); printf("\n");
-        printf("time:%3ds 60sMedian:%ulx now:%ulx\n", seconds, sort[N/2], new);
+        printf("time:%3ds  60sMedian: %ulx   now: %ulx\n", seconds, sort[N/2], new);
 
         if (!idx) { //only publish at the full minute
             float old_lux=lux.value.float_value;
